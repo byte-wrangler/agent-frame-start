@@ -1,0 +1,4 @@
+loguru==0.7.3
+openai==1.66.3
+pydantic==2.10.4
+SQLAlchemy==2.0.37

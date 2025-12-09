@@ -1,0 +1,39 @@
+# IDE
+.idea
+.vscode
+*.iml
+
+# OS
+.DS_Store
+
+# Logs
+log
+logs
+*.log
+
+# Python
+.venv
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Database
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Config (contains sensitive info)
+config/config.json
+
+# Environment
+.env
+.env.local
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
