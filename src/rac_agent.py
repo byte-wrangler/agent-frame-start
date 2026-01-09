@@ -20,13 +20,14 @@ class CheckResult(BaseModel):
     recommendations: List[str] = Field(default_factory=list)
 
 class CheckAction(Action):
-    """Check action to validate reasoning and execution consistency"""
-    
+    """检查动作 - 验证推理和执行的一致性"""
+
     def __init__(self, reason_action: ReasonAction, execution_results: List[Message]):
-        """Initialize check action
-        
-        :param reason_action: The reasoning action to check
-        :param execution_results: Results from executing the action
+        """初始化检查动作
+
+        Args:
+            reason_action: 要检查的推理动作
+            execution_results: 执行动作的结果
         """
         self.type = "check"
         self.reason_action = reason_action
@@ -35,10 +36,13 @@ class CheckAction(Action):
         self.tool_calls = reason_action.tool_calls
         
     def execute(self, env: "Environment") -> ActionResult:
-        """Execute the check action
-        
-        :param env: Environment to interact with
-        :return: ActionResult with check results
+        """执行检查动作
+
+        Args:
+            env: 交互环境
+
+        Returns:
+            包含检查结果的 ActionResult
         """
         try:
             check_result = self._perform_consistency_check()
@@ -74,12 +78,16 @@ class CheckAction(Action):
             )
     
     def _perform_consistency_check(self) -> CheckResult:
-        """Perform consistency check between reasoning and execution"""
+        """执行推理和执行之间的一致性检查
+
+        Returns:
+            检查结果
+        """
         issues = []
         recommendations = []
         consistency_score = 1.0
         
-        # Check 1: Verify all planned tool calls were executed
+        # 检查 1: 验证所有计划的工具调用是否都已执行
         planned_tools = set()
         for tool_call in self.tool_calls:
             tool_name = tool_call.get('function', {}).get('name')
@@ -99,13 +107,13 @@ class CheckAction(Action):
             recommendations.append("重新执行缺失的工具调用")
             consistency_score -= 0.3
         
-        # Check 2: Verify reasoning matches execution order
+        # 检查 2: 验证推理是否与执行顺序匹配
         if len(self.tool_calls) != len([r for r in self.execution_results if r.type == MessageType.TOOL]):
             issues.append("推理中的工具调用数量与实际执行数量不匹配")
             recommendations.append("检查工具调用的执行逻辑")
             consistency_score -= 0.2
         
-        # Check 3: Check for execution errors
+        # 检查 3: 检查执行错误
         execution_errors = []
         for result in self.execution_results:
             if result.type == MessageType.TOOL:
@@ -118,9 +126,9 @@ class CheckAction(Action):
             recommendations.append("检查工具参数和执行环境")
             consistency_score -= 0.3
         
-        # Check 4: Verify reasoning logic coherence
+        # 检查 4: 验证推理逻辑的连贯性
         if self.thought:
-            # Simple heuristic: check if thought mentions tools that were actually used
+            # 简单启发式：检查思考内容是否提及实际使用的工具
             thought_lower = self.thought.lower()
             for tool_name in executed_tools:
                 if tool_name.lower() not in thought_lower:
@@ -128,7 +136,7 @@ class CheckAction(Action):
                     recommendations.append("确保推理过程与实际行动一致")
                     consistency_score -= 0.1
         
-        # Check 5: Verify termination logic
+        # 检查 5: 验证终止逻辑
         has_terminate_call = any(
             tool_call.get('function', {}).get('name') == 'terminate' 
             for tool_call in self.tool_calls
@@ -143,10 +151,10 @@ class CheckAction(Action):
             recommendations.append("检查终止逻辑的执行")
             consistency_score -= 0.2
         
-        # Ensure consistency score is within bounds
+        # 确保一致性分数在范围内
         consistency_score = max(0.0, min(1.0, consistency_score))
-        
-        # Determine overall success (threshold: 0.7)
+
+        # 确定总体成功（阈值：0.7）
         success = consistency_score >= 0.7 and len(issues) == 0
         
         return CheckResult(
@@ -194,7 +202,7 @@ Focus only on the progress of current thinking and execution.
 """
 
 class RACAgent(ABC):
-    """Reason-Action-Check Agent with consistency validation"""
+    """RAC Agent - 带一致性验证的推理-行动-检查智能体"""
 
     def __init__(
         self,
@@ -203,12 +211,13 @@ class RACAgent(ABC):
         tools: Optional[list[Tool]] = None,
         check_threshold: float = 0.7
     ):
-        """Initialize the RAC Agent
+        """初始化 RAC Agent
 
-        :param description: Description of the agent
-        :param model: LLM model to be used
-        :param tools: List of tools can be used
-        :param check_threshold: Threshold for consistency check (0-1)
+        Args:
+            description: Agent 描述
+            model: 使用的 LLM 模型名称
+            tools: 可用工具列表
+            check_threshold: 一致性检查阈值（0-1）
         """
         self.llm_caller = LlmCaller(f"{description}\n\n{COT_PROMPT}", model)
         self.check_llm_caller = LlmCaller(f"{description}\n\n{CHECK_PROMPT}", model)
@@ -218,22 +227,27 @@ class RACAgent(ABC):
             else [TerminateTool()]
         self.check_threshold = check_threshold
 
-    def run(self,
-            env: Environment,
-            max_steps: Optional[int] = 50,
-            enable_check: bool = True
-        ) -> Message:
-        """Main loop for the agent to run (Reason + Action + Check)
+    def run(
+        self,
+        env: Environment,
+        max_steps: Optional[int] = 50,
+        enable_check: bool = True
+    ) -> Message:
+        """Agent 主循环（推理-行动-检查）
 
-        1. Observe: Observe messages from the environment.
-        2. Reason: Think (reason) to make an action.
-        3. Action: Execute the action and put result messages to environment.
-        4. Check: Validate consistency between reasoning and execution.
+        执行流程：
+        1. Observe: 从环境中观察消息
+        2. Reason: 推理并决定下一步动作
+        3. Action: 执行动作并将结果放回环境
+        4. Check: 验证推理和执行之间的一致性
 
-        :param env: Environment that the agent interact with.
-        :param max_steps: Max steps for the agent to run.
-        :param enable_check: Whether to enable consistency checking.
-        :return: the final message
+        Args:
+            env: Agent 交互的环境
+            max_steps: 最大执行步数
+            enable_check: 是否启用一致性检查
+
+        Returns:
+            最终消息
         """
         emit_event(
             EventType.AGENT,
@@ -243,27 +257,27 @@ class RACAgent(ABC):
 
         current_step = 0
         while True:
-            # Observe
+            # 观察
             self.observe(env)
-            
-            # Reason
+
+            # 推理
             reason_action = self.reason()
-            
-            # Action
+
+            # 行动
             action_results = self.act(reason_action, env)
-            
-            # Check (if enabled and not terminating)
+
+            # 检查（如果启用且不是终止动作）
             if enable_check and not self._is_terminating_action(reason_action):
                 check_result = self.check(reason_action, action_results, env)
                 if not check_result.success:
-                    # If check fails, add failure message and continue
+                    # 如果检查失败，添加失败消息并继续
                     env.add_message(check_result.value)
                     current_step += 1
                     if max_steps is not None and current_step >= max_steps:
                         break
                     continue
 
-            # Check for completion
+            # 检查是否完成
             latest_message: Message = env.peek_message()
             if latest_message and latest_message.type == MessageType.DONE:
                 return env.peek_latest_not_empty_message(MessageType.ASSISTANT)
@@ -273,20 +287,28 @@ class RACAgent(ABC):
                 return latest_message
 
     def observe(self, env):
-        """Observe unread messages from environment."""
+        """从环境中观察未读消息
+
+        Args:
+            env: 要观察的环境
+        """
         messages = env.pull_messages()
         self.memory.add_messages(messages)
 
     def reason(self) -> ReasonAction:
-        """Reason to make an action"""
-        # Recall memories
+        """推理并决定下一步动作
+
+        Returns:
+            推理动作
+        """
+        # 回忆记忆
         llm_messages = []
         for message in self.memory.messages:
             llm_messages.append(message.to_llm_message())
 
-        # Focus on the latest message
+        # 聚焦于最新消息
         focus_prompt = FOCUS_PROMPT
-        # Check if stuck
+        # 检查是否卡住
         if self._is_stuck():
             focus_prompt = self._handle_stuck(focus_prompt)
 
@@ -297,7 +319,7 @@ class RACAgent(ABC):
             ).to_llm_message()
         )
 
-        # Call LLM to reason
+        # 调用 LLM 进行推理
         llm_response = self.llm_caller.ask_tool(
             messages=llm_messages,
             timeout=300,
@@ -314,11 +336,19 @@ class RACAgent(ABC):
         )
 
     def act(self, action: ReasonAction, env: Environment) -> List[Message]:
-        """Execute the action and put results to the environment."""
-        # Execute the action
+        """执行动作并将结果放入环境
+
+        Args:
+            action: 要执行的推理动作
+            env: Agent 交互的环境
+
+        Returns:
+            执行结果消息列表
+        """
+        # 执行动作
         action_result = action.execute(env)
 
-        # Put action result into environment
+        # 将动作结果放入环境
         if not action_result.success or not action_result.value:
             error_message = Message(
                 type=MessageType.USER,
@@ -331,19 +361,39 @@ class RACAgent(ABC):
         return action_result.value
 
     def check(self, reason_action: ReasonAction, execution_results: List[Message], env: Environment) -> ActionResult:
-        """Check consistency between reasoning and execution."""
+        """检查推理和执行之间的一致性
+
+        Args:
+            reason_action: 推理动作
+            execution_results: 执行结果
+            env: 交互环境
+
+        Returns:
+            检查结果
+        """
         check_action = CheckAction(reason_action, execution_results)
         return check_action.execute(env)
 
     def _is_terminating_action(self, action: ReasonAction) -> bool:
-        """Check if the action contains terminate tool call."""
+        """检查动作是否包含终止工具调用
+
+        Args:
+            action: 推理动作
+
+        Returns:
+            是否为终止动作
+        """
         return any(
             tool_call.get('function', {}).get('name') == 'terminate'
             for tool_call in action.tool_calls
         )
 
     def _is_stuck(self):
-        """Check if there are repeated thinking in memory (Stuck)."""
+        """检查记忆中是否存在重复思考（卡住）
+
+        Returns:
+            如果卡住返回 True
+        """
         if len(self.memory.messages) < 2:
             return False
 
@@ -357,6 +407,13 @@ class RACAgent(ABC):
         return duplicate_count > 0
 
     def _handle_stuck(self, next_prompt: str) -> str:
-        """Handle stuck situation"""
+        """处理卡住的情况
+
+        Args:
+            next_prompt: 下一个提示词
+
+        Returns:
+            包含卡住提示的新提示词
+        """
         stuck_prompt = "已经发现你正在重复思考，请避免重复已经思考过的内容并尝试新的思考，如果思考结束请使用terminate工具"
         return f"{stuck_prompt}\n{next_prompt}"

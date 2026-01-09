@@ -604,7 +604,7 @@ Focus only on the progress of current thinking and execution.
 - 提醒 LLM 不要重复历史思考
 - 聚焦当前任务进展
 
-#### 6.4 防止重复思考机制 - 核心创新
+#### 6.4 防止重复思考机制
 
 ```python
 def _is_stuck(self) -> bool:
