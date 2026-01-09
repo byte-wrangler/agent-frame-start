@@ -17,11 +17,15 @@ class MessageType(Enum):
 
 
 class Message:
-    """Message that agent used to talk to env"""
+    """Agent 与环境通信的消息类"""
 
-    def __init__(self,
-                 mtype: MessageType,
-                 content: str):
+    def __init__(self, mtype: MessageType, content: str):
+        """初始化消息
+
+        Args:
+            mtype: 消息类型
+            content: 消息内容
+        """
         self.id = str(uuid.uuid4())
         self.time = time.time()
         self.mtype = mtype
@@ -35,36 +39,59 @@ class Message:
 
 
 class Tool(ABC):
-    """Tool that an agent can use"""
+    """Agent 可使用的工具抽象类"""
 
     @abstractmethod
     def get_schema(self):
+        """获取工具的描述信息（名称、参数等）"""
         pass
 
     @abstractmethod
     def execute(self, kwargs) -> str:
+        """执行工具的具体逻辑
+
+        Args:
+            kwargs: 工具参数字典
+
+        Returns:
+            工具执行结果
+        """
         pass
 
 
 class Action(ABC):
-    """Action to executed by an agent"""
+    """Agent 执行的动作抽象类"""
 
     @abstractmethod
     def execute(self) -> list[Message]:
-        """Execute the action"""
+        """执行动作并返回消息列表"""
+        pass
 
 
 class ReasonAction(Action):
+    """推理动作（包含思考和工具调用）"""
 
     type = "reason"
 
     def __init__(self, thought: str, tools: dict[str, Tool], tool_calls: list):
+        """初始化推理动作
+
+        Args:
+            thought: 推理思考内容
+            tools: 可用工具字典
+            tool_calls: 要调用的工具列表
+        """
         self.type = ReasonAction.type
         self.thought = thought
         self.tools = tools
         self.tool_calls = tool_calls
 
     def execute(self) -> list[Message]:
+        """执行推理动作
+
+        Returns:
+            包含推理内容和工具执行结果的消息列表
+        """
         msgs = [Message(MessageType.REASON, self.thought)]
         for tool_call in self.tool_calls:
             tool_name: str = tool_call.get("tool_name", None)
@@ -82,21 +109,37 @@ class ReasonAction(Action):
         return msgs
 
 class FinalAction(Action):
+    """最终答案动作"""
 
     type = "final"
 
     def __init__(self, content: str):
+        """初始化最终动作
+
+        Args:
+            content: 最终答案内容
+        """
         self.type = FinalAction.type
         self.content = content
 
     def execute(self) -> list[Message]:
+        """执行最终动作
+
+        Returns:
+            包含最终答案的完成消息列表
+        """
         return [Message(MessageType.DONE, self.content)]
 
 
 class Environment(ABC):
-    """Environment that agents talk to"""
+    """Agent 交互的环境类"""
 
     def __init__(self, initial_message: str = None):
+        """初始化环境
+
+        Args:
+            initial_message: 初始消息内容（可选）
+        """
         self.messages: list[Message] = []
         self.consumed: Dict[str, bool] = {}
 
@@ -104,26 +147,45 @@ class Environment(ABC):
             self.add_message(Message(MessageType.NORMAL, initial_message))
 
     def add_message(self, message: Message):
+        """添加消息到环境
+
+        Args:
+            message: 要添加的消息
+        """
         self.messages.append(message)
         self.consumed[message.id] = False
 
     def add_messages(self, messages: list[Message]):
+        """批量添加消息到环境
+
+        Args:
+            messages: 消息列表
+        """
         for message in messages:
             self.add_message(message)
 
     def pull_messages(self) -> list[Message]:
+        """拉取所有未消费的消息
+
+        Returns:
+            未消费的消息列表
+        """
         unconsumed_messages: list[Message] = []
         for msg in self.messages:
             if self.consumed[msg.id] is not True:
                 unconsumed_messages.append(msg)
 
-        # Once pulled from the environment,
-        # the message is considered as consumed.
+        # 拉取后标记为已消费
         for unconsumed_message in unconsumed_messages:
             self.consumed[unconsumed_message.id] = True
         return unconsumed_messages
 
     def pull_one_message(self) -> Optional[Message]:
+        """拉取一条未消费的消息
+
+        Returns:
+            未消费的消息，如果没有则返回 None
+        """
         for msg in self.messages:
             if self.consumed[msg.id] is not True:
                 self.consumed[msg.id] = True
@@ -131,11 +193,17 @@ class Environment(ABC):
         return None
 
     def peek_message(self) -> Optional[Message]:
+        """查看最新消息（不标记为已消费）
+
+        Returns:
+            最新的消息，如果没有则返回 None
+        """
         return self.messages[-1] if len(self.messages) > 0 else None
 
 
 class Agent(ABC):
-    """Agent abstraction"""
+    """ReAct Agent 智能体抽象类"""
+
     TOOL_USER_AGENT_DESC = """
     ======
     工具使用、思考过程与输出格式：
@@ -176,24 +244,34 @@ class Agent(ABC):
     final|待回答的内容
     """
 
-    def __init__(self,
-                 desc: str,
-                 model: str = "qwen-max",
-                 tools: dict = None,
-                 verbose: bool = True):
+    def __init__(self, desc: str, model: str = "qwen-max", tools: dict = None, verbose: bool = True):
+        """初始化 ReAct Agent
+
+        Args:
+            desc: Agent 描述
+            model: 使用的 LLM 模型名称
+            tools: 可用工具字典
+            verbose: 是否输出详细日志
+        """
         self.memory = Memory()
         self.tools = tools or {}
         self.llm_caller = LlmCaller(self._make_sys_prompt(desc), model)
         self.env: Optional[Environment] = None
-
         self._verbose = verbose
 
     def run(self, env: Environment) -> Message:
-        """Main loop for the agent to run (Reason + Act)
+        """Agent 主循环（观察-推理-行动）
 
-        1. Observe: Observe the message from the environment
-        2. Thought: Think (Reason) to make an action
-        3. Action: Execute the action and put the result to Environment
+        执行流程：
+        1. Observe: 从环境中观察消息
+        2. Reason: 推理并决定下一步动作
+        3. Act: 执行动作并将结果放回环境
+
+        Args:
+            env: 交互环境
+
+        Returns:
+            最终完成消息
         """
         self.env = env
         while True:
@@ -208,56 +286,57 @@ class Agent(ABC):
                 return last_message
 
     def observe(self, env: Environment) -> list[Message]:
-        """Observe a message from the environment
+        """从环境中观察消息
 
-        :return: a message
+        Args:
+            env: 交互环境
+
+        Returns:
+            观察到的消息列表
         """
         messages = env.pull_messages()
 
-        # Save in memory
+        # 保存到记忆中
         for message in messages:
             self.memory.save_in_memory(message)
             emit_event(EventType.AGENT, f"[Observe] type={message.mtype} content={message.content}")
         return messages
 
     def reason(self) -> list[Action]:
-        """Observe the message in the environment,
-        and determine which action to be executed.
+        """推理并决定下一步动作
 
-        :return: a set of actions executed
+        使用 LLM 分析当前情况，决定是继续推理、使用工具还是给出最终答案
+
+        Returns:
+            要执行的动作列表
         """
-
-        # Use LLM to reason
+        # 使用 LLM 进行推理
         first_message = "" if self.memory.is_empty() else self.memory.get_first_message().content
         messages_content = f"""# 原始问题\n{first_message}\n"""
 
+        # 添加历史推理过程
         history_message = self.memory.recall()
         if history_message is not None and len(history_message) > 0:
-            messages_content += f"""
-# 历史思考推理与执行过程
-**不要重复历史思考推理与执行，只关注当前思考与执行的推进。**
-{history_message}
-"""
+            messages_content += f"\n# 历史思考推理与执行过程\n**不要重复历史思考推理与执行，只关注当前思考与执行的推进。**\n{history_message}\n"
+
+        # 添加当前思考或工具执行结果
         latest_message_content = self.memory.get_latest_message_content()
         if latest_message_content is not None and len(latest_message_content) > 0:
-            messages_content += f"""
-# 当下的思考或工具执行结果
-{self.memory.get_latest_message_content()}
+            messages_content += f"\n# 当下的思考或工具执行结果\n{self.memory.get_latest_message_content()}\n\n"
 
-"""
         llm_output = self.llm_caller.ask(messages_content)
 
-        llm_output = llm_output.replace("`", "")\
-                               .replace("json", "").strip()
+        # 清理 LLM 输出
+        llm_output = llm_output.replace("`", "").replace("json", "").strip()
 
-        # Final action
+        # 解析最终答案动作
         if llm_output.startswith("final"):
             content = llm_output.split("|")[1]
             action = FinalAction(content)
             emit_event(EventType.AGENT, f"[Thought] Export final message: {llm_output}")
             return [action]
 
-        # Reason action
+        # 解析推理动作
         try:
             action_output = json.loads(llm_output)
         except json.JSONDecodeError:
@@ -277,9 +356,13 @@ class Agent(ABC):
 
 
     def act(self, actions: list[Action]) -> list[Message]:
-        """Execute actions and return the output messages
+        """执行动作并返回输出消息
 
-        :return: a list of messages
+        Args:
+            actions: 要执行的动作列表
+
+        Returns:
+            执行结果消息列表
         """
         out_messages = []
         for action in actions:
@@ -298,36 +381,67 @@ class Agent(ABC):
         return out_messages
 
     def _make_sys_prompt(self, desc: str) -> str:
+        """构建系统提示词
+
+        Args:
+            desc: Agent 描述
+
+        Returns:
+            完整的系统提示词
+        """
         return (desc + "\n" +
                 Agent.TOOL_USER_AGENT_DESC % str([tool.get_schema() for tool in self.tools.values()]))
 
 
 class Memory:
-    """Short-term memory of agent"""
+    """Agent 的短期记忆类"""
 
     def __init__(self):
+        """初始化记忆"""
         self.history: list[Message] = []
 
     def save_in_memory(self, message: Message):
-        """Save a message to Memory"""
+        """保存消息到记忆中
+
+        Args:
+            message: 要保存的消息
+        """
         self.history.append(message)
 
     def recall(self, n: int = 2):
-        """Recall latest messages in memory
+        """回忆历史消息（排除首尾消息）
 
-        :param n: number of messages to recall
-        :return: latest n messages
+        Args:
+            n: 回忆的消息数量（当前实现返回所有中间消息）
+
+        Returns:
+            格式化的历史消息字符串
         """
         if len(self.history[1:-1]) == 0:
             return ''
         return '- ' + '\n- '.join([msg.content for msg in self.history[1:-1]])
 
     def get_latest_message_content(self) -> str:
+        """获取最新消息内容
+
+        Returns:
+            最新消息的内容，如果记忆为空则返回空字符串
+        """
         return self.history[-1].content if len(self.history) > 1 else ''
 
     def get_first_message(self):
+        """获取第一条消息（通常是原始问题）
+
+        Returns:
+            第一条消息，如果记忆为空则返回 None
+        """
         return self.history[0] if len(self.history) > 0 else None
 
     def is_empty(self):
+        """检查记忆是否为空
+
+        Returns:
+            如果记忆为空返回 True，否则返回 False
+        """
         return len(self.history) == 0
 
