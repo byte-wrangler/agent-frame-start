@@ -24,7 +24,7 @@ class MessageType(Enum):
 
 
 class Message(BaseModel):
-    """Message that agent uses to interact with environment"""
+    """Agent 与环境交互的消息类"""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     time: float = Field(default_factory=lambda: time.time())
@@ -33,6 +33,14 @@ class Message(BaseModel):
 
     @classmethod
     def from_llm_message(cls, message: LlmMessage) -> "Message":
+        """从 LLM 消息转换为 Agent 消息
+
+        Args:
+            message: LLM 消息对象
+
+        Returns:
+            Agent 消息对象
+        """
         if message.role == RoleType.ASSISTANT:
             return cls(
                 type=MessageType.ASSISTANT,
@@ -63,6 +71,11 @@ class Message(BaseModel):
         raise ValueError(f"Invalid role type: {message.role}")
 
     def to_llm_message(self) -> LlmMessage:
+        """转换为 LLM 消息格式
+
+        Returns:
+            LLM 消息对象
+        """
         if self.type == MessageType.ASSISTANT:
             return LlmMessage(
                 role=RoleType.ASSISTANT,
@@ -90,6 +103,14 @@ class Message(BaseModel):
 
 
     def is_same(self, other: "Message") -> bool:
+        """判断两条消息是否相同
+
+        Args:
+            other: 另一条消息
+
+        Returns:
+            是否相同
+        """
         if self.type != other.type:
             return False
 
@@ -109,6 +130,11 @@ class Message(BaseModel):
         raise ValueError(f"Invalid message type: {self.type}")
 
     def is_empty(self) -> bool:
+        """判断消息是否为空
+
+        Returns:
+            是否为空
+        """
         if self.type == MessageType.SYSTEM:
             return self.content is None or self.content.strip() == ""
         elif self.type == MessageType.USER:
@@ -122,22 +148,33 @@ class Message(BaseModel):
 
 
 class Tool(ABC, BaseModel):
-    """Tool for agent to execute"""
+    """Agent 可执行的工具抽象类"""
 
     name: str
     description: str
     parameters: Optional[dict] = None
 
     def __call__(self, **kwargs) -> Any:
-        """Execute the tool with given parameters."""
+        """使用给定参数执行工具"""
         return self.execute(**kwargs)
 
     @abstractmethod
     def execute(self, **kwargs) -> Any:
-        """Execute the tool with given parameters."""
+        """使用给定参数执行工具
+
+        Args:
+            **kwargs: 工具参数
+
+        Returns:
+            工具执行结果
+        """
 
     def to_param(self) -> Dict:
-        """Convert tool to function call format."""
+        """转换为函数调用格式
+
+        Returns:
+            函数调用参数字典
+        """
         return {
             "type": "function",
             "function": {
@@ -150,7 +187,10 @@ class Tool(ABC, BaseModel):
 TERMINATE_PROMPT = """Terminate the interaction when the request is met OR if the assistant cannot proceed further with the task.
 When you have finished all the tasks, call this tool to end the work."""
 
+
 class TerminateTool(Tool):
+    """终止工具 - 用于结束任务执行"""
+
     name: str = "terminate"
     description: str = TERMINATE_PROMPT
     parameters: dict = {
@@ -166,7 +206,14 @@ class TerminateTool(Tool):
     }
 
     async def execute(self, status: str) -> str:
-        """Finish the current execution"""
+        """完成当前执行
+
+        Args:
+            status: 完成状态（success 或 failure）
+
+        Returns:
+            完成消息
+        """
         return f"The interaction has been completed with status: {status}"
 
 
@@ -189,20 +236,20 @@ class Action(ABC):
         return {}
 
 class ReasonAction(Action):
+    """推理动作 - 包含思考和工具调用"""
+
     def __init__(
             self,
             thought: str,
             tools: list[Tool],
-            tool_calls: list[Union[
-                dict,
-                ChatCompletionMessageToolCall
-            ]]
+            tool_calls: list[Union[dict, ChatCompletionMessageToolCall]]
     ):
-        """Reason action
+        """初始化推理动作
 
-        :param thought: Thought (reason content)
-        :param tools: Tool set
-        :param tool_calls: Tool calls of the action
+        Args:
+            thought: 思考内容（推理过程）
+            tools: 可用工具集合
+            tool_calls: 要调用的工具列表
         """
         self.type = "reason"
         self.thought = thought
@@ -215,6 +262,14 @@ class ReasonAction(Action):
         }
 
     def execute(self, env: "Environment") -> ActionResult:
+        """执行推理动作
+
+        Args:
+            env: 交互环境
+
+        Returns:
+            包含执行结果的 ActionResult
+        """
         try:
             messages = []
 
@@ -291,6 +346,14 @@ class ReasonAction(Action):
 
     @staticmethod
     def _parse_tool_args(tool_args) -> dict:
+        """解析工具参数
+
+        Args:
+            tool_args: 工具参数（可能是字典或 JSON 字符串）
+
+        Returns:
+            解析后的参数字典
+        """
         if isinstance(tool_args, dict):
             return tool_args
 
@@ -308,40 +371,66 @@ class ReasonAction(Action):
 
 
 class Memory(BaseModel):
+    """Agent 的记忆类"""
+
     messages: List[Message] = Field(default_factory=list)
     max_messages: int = Field(default=100)
 
     def add_message(self, message: Message) -> None:
-        """Add a message to memory"""
+        """添加消息到记忆
+
+        Args:
+            message: 要添加的消息
+        """
         self.messages.append(message)
 
         if len(self.messages) > self.max_messages:
             self.messages = self.messages[-self.max_messages :]
 
     def add_messages(self, messages: List[Message]) -> None:
-        """Add multiple messages to memory"""
+        """批量添加消息到记忆
+
+        Args:
+            messages: 消息列表
+        """
         self.messages.extend(messages)
-        # Optional: Implement message limit
+        # 可选：实现消息数量限制
         if len(self.messages) > self.max_messages:
             self.messages = self.messages[-self.max_messages :]
 
     def clear(self) -> None:
-        """Clear all messages"""
+        """清空所有消息"""
         self.messages.clear()
 
     def get_recent_messages(self, n: int) -> List[Message]:
-        """Get n most recent messages"""
+        """获取最近的 n 条消息
+
+        Args:
+            n: 消息数量
+
+        Returns:
+            最近的消息列表
+        """
         return self.messages[-n:]
 
     def to_dict_list(self) -> List[dict]:
-        """Convert messages to list of dicts"""
+        """转换消息为字典列表
+
+        Returns:
+            字典列表
+        """
         return [msg.to_dict() for msg in self.messages]
 
 
 class Environment(ABC):
-    """Environment that agent interact with"""
+    """Agent 交互的环境类"""
 
     def __init__(self, initial_message: str = None):
+        """初始化环境
+
+        Args:
+            initial_message: 初始消息内容（可选）
+        """
         self.messages: list[Message] = []
         self.consumed: Dict[str, bool] = {}
         self.context = {}
@@ -353,26 +442,45 @@ class Environment(ABC):
             ))
 
     def add_message(self, message: Message):
+        """添加消息到环境
+
+        Args:
+            message: 要添加的消息
+        """
         self.messages.append(message)
         self.consumed[message.id] = False
 
     def add_messages(self, messages: list[Message]):
+        """批量添加消息到环境
+
+        Args:
+            messages: 消息列表
+        """
         for message in messages:
             self.add_message(message)
 
     def pull_messages(self) -> list[Message]:
+        """拉取所有未消费的消息
+
+        Returns:
+            未消费的消息列表
+        """
         unconsumed_messages: list[Message] = []
         for msg in self.messages:
             if self.consumed[msg.id] is not True:
                 unconsumed_messages.append(msg)
 
-        # Once pulled from the environment,
-        # the message is considered as consumed.
+        # 拉取后标记为已消费
         for unconsumed_message in unconsumed_messages:
             self.consumed[unconsumed_message.id] = True
         return unconsumed_messages
 
     def pull_one_message(self) -> Optional[Message]:
+        """拉取一条未消费的消息
+
+        Returns:
+            未消费的消息，如果没有则返回 None
+        """
         for msg in self.messages:
             if self.consumed[msg.id] is not True:
                 self.consumed[msg.id] = True
@@ -380,23 +488,42 @@ class Environment(ABC):
         return None
 
     def peek_message(self) -> Optional[Message]:
+        """查看最新消息（不标记为已消费）
+
+        Returns:
+            最新的消息，如果没有则返回 None
+        """
         return self.messages[-1] if len(self.messages) > 0 else None
 
     def peek_latest_not_empty_message(self, msg_type: MessageType) -> Optional[Message]:
+        """查看指定类型的最新非空消息
+
+        Args:
+            msg_type: 消息类型
+
+        Returns:
+            最新的非空消息，如果没有则返回 None
+        """
         for msg in reversed(self.messages):
             if msg.type == msg_type and not msg.is_empty():
                 return msg
         return None
 
     def set_context_value(self, key, value):
+        """设置上下文值
+
+        Args:
+            key: 键
+            value: 值
+        """
         self.context[key] = value
 
 
 class AgentStatus(Enum):
-    """Status of the agent"""
+    """Agent 状态枚举"""
 
-    RUNNING = "running"
-    IDLE = "idle"
+    RUNNING = "running"  # 运行中
+    IDLE = "idle"        # 空闲
 
 
 COT_PROMPT = """
@@ -418,6 +545,7 @@ Focus only on the progress of current thinking and execution.
 """
 
 class ReActAgent(ABC):
+    """ReAct Agent 智能体类"""
 
     def __init__(
         self,
@@ -425,11 +553,12 @@ class ReActAgent(ABC):
         model: str = "qwen-max-latest",
         tools: Optional[list[Tool]] = None
     ):
-        """Defines the Reason Action Agent
+        """初始化 ReAct Agent
 
-        :param description: Description of the agent
-        :param model: LLM model to be used
-        :param tools: List of tools can be used
+        Args:
+            description: Agent 描述
+            model: 使用的 LLM 模型名称
+            tools: 可用工具列表
         """
 
         self.llm_caller = LlmCaller(f"{description}\n\n{COT_PROMPT}", model)
@@ -438,22 +567,22 @@ class ReActAgent(ABC):
             if tools is not None \
             else [TerminateTool()]
 
-    def run(self,
-            env: Environment,
-            max_steps: Optional[int] = 20
-        ) -> Message:
-        """Main loop for the agent to run (Reason + Act)
+    def run(self, env: Environment, max_steps: Optional[int] = 20) -> Message:
+        """Agent 主循环（观察-推理-行动）
 
-        1. Observe: Observe messages from the environment.
-        2. Thought: Think (reason) to make an action.
-        3. Action: Execute the action and put result messages to environment.
+        执行流程：
+        1. Observe: 从环境中观察消息
+        2. Reason: 推理并决定下一步动作
+        3. Act: 执行动作并将结果放回环境
 
-        Run the loop until the final action is been executed.
+        循环执行直到最终动作被执行
 
-        :param env: Environment that the agent interact with.
-        :param max_steps: Max steps for the agent to run.
-            No steps limitation if None is given.
-        :return: the final message
+        Args:
+            env: Agent 交互的环境
+            max_steps: 最大执行步数，None 表示无限制
+
+        Returns:
+            最终消息
         """
         emit_event(
             EventType.AGENT,
@@ -476,9 +605,10 @@ class ReActAgent(ABC):
                 return latest_message
 
     def observe(self, env):
-        """Observe unread messages from environment.
+        """从环境中观察未读消息
 
-        :param env: Environment to observe
+        Args:
+            env: 要观察的环境
         """
         messages = env.pull_messages()
         self.memory.add_messages(messages)
@@ -490,9 +620,10 @@ class ReActAgent(ABC):
         #     )
 
     def reason(self) -> Action:
-        """Reason to make an action
+        """推理并决定下一步动作
 
-        :return: Action to take
+        Returns:
+            要执行的动作
         """
         # Recall memories
         llm_messages = []
@@ -531,10 +662,11 @@ class ReActAgent(ABC):
         )
 
     def act(self, action: Action, env: Environment):
-        """Execute the action and put results to the environment.
+        """执行动作并将结果放入环境
 
-        :param action: Action to be executed.
-        :param env: Environment the agent interact with.
+        Args:
+            action: 要执行的动作
+            env: Agent 交互的环境
         """
         # Execute the action
         action_result = action.execute(env)
@@ -550,9 +682,10 @@ class ReActAgent(ABC):
         env.add_messages(action_result.value)
 
     def _is_stuck(self):
-        """Check if there are repeated thinking in memory (Stuck).
+        """检查记忆中是否存在重复思考（卡住）
 
-        :return: true if stuck
+        Returns:
+            如果卡住返回 True
         """
         if len(self.memory.messages) < 2:
             return False
@@ -567,10 +700,13 @@ class ReActAgent(ABC):
         return duplicate_count > 0
 
     def _handle_stuck(self, next_prompt: str) -> str:
-        """Handle stuck situation"""
+        """处理卡住的情况
 
-        # stuck_prompt = ("Observed duplicate responses. Consider new strategies "
-        #                 "and avoid repeating ineffective paths already attempted.")
+        Args:
+            next_prompt: 下一个提示词
 
+        Returns:
+            包含卡住提示的新提示词
+        """
         stuck_prompt = "已经发现你正在重复思考，请避免重复已经思考过的内容并尝试新的思考，如果思考结束请使用terminate工具"
         return f"{stuck_prompt}\n{next_prompt}"
